@@ -77,7 +77,7 @@ int mca_coll_acoll_ft_event(int status);
 
 END_C_DECLS
 
-#define MCA_COLL_ACOLL_MAX_CID            100
+#define MCA_COLL_ACOLL_MAX_SUBC           10
 #define MCA_COLL_ACOLL_ROOT_CHANGE_THRESH 10
 
 typedef enum MCA_COLL_ACOLL_SG_SIZES {
@@ -210,8 +210,9 @@ struct mca_coll_acoll_module_t {
     int mnode_log2_sg_size;
     int allg_lin;
     int allg_ring;
-    coll_acoll_subcomms_t subc[MCA_COLL_ACOLL_MAX_CID];
+    coll_acoll_subcomms_t *subc[MCA_COLL_ACOLL_MAX_SUBC];
     coll_acoll_reserve_mem_t reserve_mem_s;
+    int num_subc;
 };
 
 #ifdef HAVE_XPMEM_H

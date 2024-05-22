@@ -15,6 +15,10 @@
 #include "ompi/mca/coll/base/coll_base_functions.h"
 #include "opal/include/opal/align.h"
 
+extern uint64_t mca_coll_acoll_xpmem_buffer_size;
+extern int mca_coll_acoll_without_xpmem;
+extern int mca_coll_acoll_xpmem_use_sr_buf;
+
 /* Function to allocate scratch buffer */
 static inline void *coll_acoll_buf_alloc(coll_acoll_reserve_mem_t *reserve_mem_ptr, uint64_t size)
 {
@@ -55,6 +59,81 @@ static inline void coll_acoll_buf_free(coll_acoll_reserve_mem_t *reserve_mem_ptr
         /* Mark the reserved buffer as free to be used */
         reserve_mem_ptr->reserve_mem_in_use = false;
     }
+}
+
+/* Function to check if subcomms structure is allocated and initialized */
+static inline int check_and_create_subc(ompi_communicator_t *comm,
+                                        mca_coll_acoll_module_t *acoll_module,
+                                        coll_acoll_subcomms_t **subc_ptr)
+{
+    int cid = ompi_comm_get_local_cid(comm);
+    int num_subc = acoll_module->num_subc;
+    coll_acoll_subcomms_t *subc;
+
+    /* Check if subcomms structure is already created for the communicator */
+    for (int i = 0; i < num_subc; i++) {
+        if (acoll_module->subc[i]->cid == cid) {
+            *subc_ptr = acoll_module->subc[i];
+            return MPI_SUCCESS;
+        }
+    }
+
+    /* Subcomms structure is not present, create one if within limit*/
+    if (num_subc == MCA_COLL_ACOLL_MAX_SUBC) {
+        *subc_ptr = NULL;
+        return MPI_SUCCESS;
+    }
+    *subc_ptr = (coll_acoll_subcomms_t *)malloc(sizeof(coll_acoll_subcomms_t));
+    if (*subc_ptr == NULL) {
+        return MPI_SUCCESS;
+    }
+    /* Update the module with the new subc */
+    acoll_module->subc[num_subc] = *subc_ptr;
+    acoll_module->num_subc++;
+
+    /* Initialize elements of subc */
+    subc = *subc_ptr;
+    subc->cid = cid;
+    subc->initialized = 0;
+    subc->is_root_node = 0;
+    subc->is_root_sg = 0;
+    subc->is_root_numa = 0;
+    subc->outer_grp_root = -1;
+    subc->subgrp_root = 0;
+    subc->num_nodes = 1;
+    subc->prev_init_root = -1;
+    subc->num_root_change = 0;
+    subc->numa_root = 0;
+    subc->socket_ldr_root = -1;
+    subc->orig_comm = comm;
+    subc->local_comm = NULL;
+    subc->local_r_comm = NULL;
+    subc->leader_comm = NULL;
+    subc->subgrp_comm = NULL;
+    subc->socket_comm = NULL;
+    subc->socket_ldr_comm = NULL;
+    for (int j = 0; j < MCA_COLL_ACOLL_NUM_LAYERS; j++) {
+        for (int k = 0; k < MCA_COLL_ACOLL_NUM_BASE_LYRS; k++) {
+            subc->base_comm[k][j] = NULL;
+            subc->base_root[k][j] = -1;
+        }
+        subc->local_root[j] = 0;
+    }
+
+    subc->numa_comm = NULL;
+    subc->numa_comm_ldrs = NULL;
+    subc->node_comm = NULL;
+    subc->inter_comm = NULL;
+    subc->initialized_data = false;
+    subc->initialized_shm_data = false;
+    subc->data = NULL;
+#ifdef HAVE_XPMEM_H
+    subc->xpmem_buf_size = mca_coll_acoll_xpmem_buffer_size;
+    subc->without_xpmem = mca_coll_acoll_without_xpmem;
+    subc->xpmem_use_sr_buf = mca_coll_acoll_xpmem_use_sr_buf;
+#endif
+    return MPI_SUCCESS;
+
 }
 
 /* Function to compare integer elements */
@@ -139,7 +218,9 @@ static inline int mca_coll_acoll_create_base_comm(ompi_communicator_t **parent_c
 }
 
 static inline int mca_coll_acoll_comm_split_init(ompi_communicator_t *comm,
-                                                 mca_coll_acoll_module_t *acoll_module, int root)
+                                                 mca_coll_acoll_module_t *acoll_module,
+                                                 coll_acoll_subcomms_t *subc,
+                                                 int root)
 {
     opal_info_t comm_info;
     mca_coll_base_module_allreduce_fn_t coll_allreduce_org = (comm)->c_coll->coll_allreduce;
@@ -148,19 +229,9 @@ static inline int mca_coll_acoll_comm_split_init(ompi_communicator_t *comm,
     mca_coll_base_module_allreduce_fn_t coll_allreduce_loc, coll_allreduce_soc;
     mca_coll_base_module_allgather_fn_t coll_allgather_loc, coll_allgather_soc;
     mca_coll_base_module_bcast_fn_t coll_bcast_loc, coll_bcast_soc;
-    coll_acoll_subcomms_t *subc;
     int err;
     int size = ompi_comm_size(comm);
     int rank = ompi_comm_rank(comm);
-    int cid = ompi_comm_get_local_cid(comm);
-    if (cid >= MCA_COLL_ACOLL_MAX_CID) {
-        return MPI_SUCCESS;
-    }
-
-    /* Derive subcomm structure */
-    subc = &acoll_module->subc[cid];
-    subc->cid = cid;
-    subc->orig_comm = comm;
 
     (comm)->c_coll->coll_allgather = ompi_coll_base_allgather_intra_ring;
     (comm)->c_coll->coll_allreduce = ompi_coll_base_allreduce_intra_recursivedoubling;
@@ -490,18 +561,14 @@ static inline int mca_coll_acoll_xpmem_deregister(void *xpmem_apid,
 #endif
 
 static inline int coll_acoll_init(mca_coll_base_module_t *module, ompi_communicator_t *comm,
-                                  coll_acoll_data_t *data)
+                                  coll_acoll_data_t *data, coll_acoll_subcomms_t *subc)
 {
     int size, ret = 0, rank, line;
 
-    mca_coll_acoll_module_t *acoll_module = (mca_coll_acoll_module_t *) module;
-    coll_acoll_subcomms_t *subc;
     int cid = ompi_comm_get_local_cid(comm);
-    subc = &acoll_module->subc[cid];
     if (subc->initialized_data) {
         return ret;
     }
-    subc->cid = cid;
     data = (coll_acoll_data_t *) malloc(sizeof(coll_acoll_data_t));
     if (NULL == data) {
         line = __LINE__;

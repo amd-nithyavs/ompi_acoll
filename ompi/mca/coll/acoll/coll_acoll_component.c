@@ -186,47 +186,9 @@ static int acoll_register(void)
  */
 static void mca_coll_acoll_module_construct(mca_coll_acoll_module_t *module)
 {
-    for (int i = 0; i < MCA_COLL_ACOLL_MAX_CID; i++) {
-        coll_acoll_subcomms_t *subc = &module->subc[i];
-        subc->initialized = 0;
-        subc->is_root_node = 0;
-        subc->is_root_sg = 0;
-        subc->is_root_numa = 0;
-        subc->outer_grp_root = -1;
-        subc->subgrp_root = 0;
-        subc->num_nodes = 1;
-        subc->prev_init_root = -1;
-        subc->num_root_change = 0;
-        subc->numa_root = 0;
-        subc->socket_ldr_root = -1;
-        subc->local_comm = NULL;
-        subc->local_r_comm = NULL;
-        subc->leader_comm = NULL;
-        subc->subgrp_comm = NULL;
-        subc->socket_comm = NULL;
-        subc->socket_ldr_comm = NULL;
-        for (int j = 0; j < MCA_COLL_ACOLL_NUM_LAYERS; j++) {
-            for (int k = 0; k < MCA_COLL_ACOLL_NUM_BASE_LYRS; k++) {
-                subc->base_comm[k][j] = NULL;
-                subc->base_root[k][j] = -1;
-            }
-            subc->local_root[j] = 0;
-        }
 
-        subc->numa_comm = NULL;
-        subc->numa_comm_ldrs = NULL;
-        subc->node_comm = NULL;
-        subc->inter_comm = NULL;
-        subc->cid = -1;
-        subc->initialized_data = false;
-        subc->initialized_shm_data = false;
-        subc->data = NULL;
-#ifdef HAVE_XPMEM_H
-        subc->xpmem_buf_size = mca_coll_acoll_xpmem_buffer_size;
-        subc->without_xpmem = mca_coll_acoll_without_xpmem;
-        subc->xpmem_use_sr_buf = mca_coll_acoll_xpmem_use_sr_buf;
-#endif
-    }
+    /* Set number of subcomms to 0 */
+    module->num_subc = 0;
 
     /* Reserve memory init. Lazy allocation of memory when needed. */
     (module->reserve_mem_s).reserve_mem = NULL;
@@ -247,8 +209,8 @@ static void mca_coll_acoll_module_construct(mca_coll_acoll_module_t *module)
 static void mca_coll_acoll_module_destruct(mca_coll_acoll_module_t *module)
 {
 
-    for (int i = 0; i < MCA_COLL_ACOLL_MAX_CID; i++) {
-        coll_acoll_subcomms_t *subc = &module->subc[i];
+    for (int i = 0; i < module->num_subc; i++) {
+        coll_acoll_subcomms_t *subc = module->subc[i];
         if (subc->initialized_data) {
             if (subc->initialized_shm_data) {
                 if (subc->orig_comm != NULL) {
@@ -334,7 +296,11 @@ static void mca_coll_acoll_module_destruct(mca_coll_acoll_module_t *module)
             }
         }
         subc->initialized = 0;
+        free(subc);
+        module->subc[i] = NULL;
     }
+
+    module->num_subc = 0;
 
     if ((true == (module->reserve_mem_s).reserve_mem_allocate)
         && (NULL != (module->reserve_mem_s).reserve_mem)) {
