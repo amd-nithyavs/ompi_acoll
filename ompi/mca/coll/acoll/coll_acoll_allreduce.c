@@ -59,7 +59,7 @@ static inline int mca_coll_acoll_reduce_xpmem_h(const void *sbuf, void *rbuf, si
     int size;
     size_t total_dsize, dsize;
 
-    coll_acoll_init(module, comm, subc->data, subc);
+    coll_acoll_init(module, comm, /*subc->data,*/ subc, 0);
     coll_acoll_data_t *data = subc->data;
     if (NULL == data) {
         return -1;
@@ -192,7 +192,7 @@ static inline int mca_coll_acoll_allreduce_xpmem_f(const void *sbuf, void *rbuf,
     int size;
     size_t total_dsize, dsize;
 
-    coll_acoll_init(module, comm, subc->data, subc);
+    coll_acoll_init(module, comm, /*subc->data,*/ subc, 0);
     coll_acoll_data_t *data = subc->data;
     if (NULL == data) {
         return -1;
@@ -362,7 +362,7 @@ int mca_coll_acoll_allreduce_small_msgs_h(const void *sbuf, void *rbuf, size_t c
     size_t dsize;
     int err = MPI_SUCCESS;
 
-    coll_acoll_init(module, comm, subc->data, subc);
+    coll_acoll_init(module, comm, /*subc->data,*/ subc, 0);
     coll_acoll_data_t *data = subc->data;
     if (NULL == data) {
         return -1;

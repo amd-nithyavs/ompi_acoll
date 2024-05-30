@@ -128,6 +128,8 @@ typedef struct coll_acoll_data {
 #endif
     opal_shmem_ds_t *allshmseg_id;
     void **allshmmmap_sbuf;
+    int shm_present;
+    int prev_init_root;
 
     int comm_size;
     int l1_local_rank;
@@ -136,6 +138,8 @@ typedef struct coll_acoll_data {
     int *l1_gp;
     int *l2_gp;
     int l2_gp_size;
+    int l1_root;
+    int l2_root;
     int offset[4];
     int sync[2];
 } coll_acoll_data_t;

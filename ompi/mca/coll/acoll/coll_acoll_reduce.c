@@ -166,7 +166,7 @@ static inline int mca_coll_acoll_reduce_xpmem(const void *sbuf, void *rbuf, size
 
     mca_coll_acoll_module_t *acoll_module = (mca_coll_acoll_module_t *) module;
 
-    coll_acoll_init(module, comm, subc->data, subc);
+    coll_acoll_init(module, comm, /*subc->data,*/ subc, root);
     coll_acoll_reserve_mem_t *reserve_mem_rbuf_reduce = NULL;
     if (subc->xpmem_use_sr_buf != 0) {
         reserve_mem_rbuf_reduce = &(acoll_module->reserve_mem_s);
@@ -240,25 +240,28 @@ static inline int mca_coll_acoll_reduce_xpmem(const void *sbuf, void *rbuf, size
     size_t chunk = count / l1_gp_size;
     size_t my_count_size = (l1_local_rank == (l1_gp_size - 1)) ? chunk + count % l1_gp_size : chunk;
 
-    if (rank == l1_gp[0]) {
+    if (rank == l1_gp[data->l1_root]) {
         if (sbuf != MPI_IN_PLACE)
             memcpy(tmp_rbuf, sbuf, my_count_size * dsize);
-        for (int i = 1; i < l1_gp_size; i++) {
+        for (int i = 0; i < l1_gp_size; i++) {
+            if (i == data->l1_root) {
+                continue;
+            }
             ompi_op_reduce(op, (char *) data->xpmem_saddr[l1_gp[i]] + chunk * l1_local_rank * dsize,
                            (char *) tmp_rbuf + chunk * l1_local_rank * dsize, my_count_size, dtype);
         }
     } else {
         ompi_3buff_op_reduce(op,
-                             (char *) data->xpmem_saddr[l1_gp[0]] + chunk * l1_local_rank * dsize,
+                             (char *) data->xpmem_saddr[l1_gp[data->l1_root]] + chunk * l1_local_rank * dsize,
                              (char *) tmp_sbuf + chunk * l1_local_rank * dsize,
-                             (char *) data->xpmem_raddr[l1_gp[0]] + chunk * l1_local_rank * dsize,
+                             (char *) data->xpmem_raddr[l1_gp[data->l1_root]] + chunk * l1_local_rank * dsize,
                              my_count_size, dtype);
-        for (int i = 1; i < l1_gp_size; i++) {
-            if (i == l1_local_rank) {
+        for (int i = 0; i < l1_gp_size; i++) {
+            if (i == l1_local_rank || i == data->l1_root) {
                 continue;
             }
             ompi_op_reduce(op, (char *) data->xpmem_saddr[l1_gp[i]] + chunk * l1_local_rank * dsize,
-                           (char *) data->xpmem_raddr[l1_gp[0]] + chunk * l1_local_rank * dsize,
+                           (char *) data->xpmem_raddr[l1_gp[data->l1_root]] + chunk * l1_local_rank * dsize,
                            my_count_size, dtype);
         }
     }
@@ -266,27 +269,30 @@ static inline int mca_coll_acoll_reduce_xpmem(const void *sbuf, void *rbuf, size
 
     /* perform reduce to 0 */
     int local_size = l2_gp_size;
-    if ((rank == l1_gp[0]) && (local_size > 1)) {
+    if ((rank == l1_gp[data->l2_root]) && (local_size > 1)) {
         chunk = count / local_size;
         my_count_size = (l2_local_rank == (local_size - 1)) ? chunk + (count % local_size) : chunk;
 
-        if (l2_local_rank == 0) {
-            for (int i = 1; i < local_size; i++) {
+        if (l2_local_rank == data->l2_root) {
+            for (int i = 0; i < local_size; i++) {
+                if (i == data->l2_root) {
+                    continue;
+                }
                 ompi_op_reduce(op, (char *) data->xpmem_raddr[l2_gp[i]], (char *) tmp_rbuf,
                                my_count_size, dtype);
             }
         } else {
-            for (int i = 1; i < local_size; i++) {
-                if (i == l2_local_rank) {
+            for (int i = 0; i < local_size; i++) {
+                if (i == l2_local_rank || i == data->l2_root) {
                     continue;
                 }
                 ompi_op_reduce(op,
                                (char *) data->xpmem_raddr[l2_gp[i]] + chunk * l2_local_rank * dsize,
-                               (char *) data->xpmem_raddr[0] + chunk * l2_local_rank * dsize,
+                               (char *) data->xpmem_raddr[data->l2_root] + chunk * l2_local_rank * dsize,
                                my_count_size, dtype);
             }
             ompi_op_reduce(op, (char *) tmp_rbuf + chunk * l2_local_rank * dsize,
-                           (char *) data->xpmem_raddr[0] + chunk * l2_local_rank * dsize,
+                           (char *) data->xpmem_raddr[root] + chunk * l2_local_rank * dsize,
                            my_count_size, dtype);
         }
     }
@@ -324,10 +330,12 @@ int mca_coll_acoll_reduce_intra(const void *sbuf, void *rbuf, size_t count,
         return ompi_coll_base_reduce_intra_in_order_binary(sbuf, rbuf, count, dtype, op, root, comm,
                                                            module, 0, 0);
     }
+#if 0
     if (root != 0) { // ToDo: support non-zero root
         return ompi_coll_base_reduce_intra_binomial(sbuf, rbuf, count, dtype, op, root, comm,
                                                     module, 0, 0);
     }
+#endif
 
     ompi_datatype_type_size(dtype, &dsize);
     total_dsize = dsize * count;
@@ -345,7 +353,7 @@ int mca_coll_acoll_reduce_intra(const void *sbuf, void *rbuf, size_t count,
     }
 
     if (!subc->initialized || (root != subc->prev_init_root)) {
-        ret = mca_coll_acoll_comm_split_init(comm, acoll_module, subc, 0);
+        ret = mca_coll_acoll_comm_split_init(comm, acoll_module, subc, root);
         if (MPI_SUCCESS != ret) {
             return ret;
         }
